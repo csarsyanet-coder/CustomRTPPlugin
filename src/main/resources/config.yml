@@ -1,18 +1,23 @@
-teleport-confirm-timeout-seconds: 20
-teleport-confirm-distance: 32
-
 messages:
   reload: '&a&lSUKSES &8| &fConfig ArsyaCustomRTP berhasil direload.'
   disabled: '&c&lERROR &8| &fRTP ini sedang dinonaktifkan.'
   no-permission: '&c&lERROR &8| &fKamu tidak punya permission.'
   command-failed: '&c&lERROR &8| &fGagal menjalankan command RTP.'
   not-enough-balance: '&c&lERROR &8| &fSaldo minimal untuk RTP ini adalah &a$%minimum_balance%&f.'
-  success: '&a&lSUKSES &8| &fSaldo dipotong &a$%cost% &funtuk RTP &e(%world%)&f.'
-  processing: '&e&lINFO &8| &fRTP sedang diproses. Biaya akan dipotong setelah teleport berhasil.'
-  processing-no-cost: '&e&lINFO &8| &fRTP sedang diproses.'
-  not-confirmed: '&e&lINFO &8| &fRTP gagal, cooldown, atau tidak terkonfirmasi. Saldo tidak dipotong.'
-  charge-failed-after-teleport: '&6&lWARNING &8| &fRTP berhasil, tapi biaya gagal dipotong: &7%error%'
-  pending: '&e&lINFO &8| &fRTP sebelumnya masih diproses. Tunggu sebentar.'
+  processing: '&e&lINFO &8| &fRTP sedang diproses. Biaya akan dipotong saat kamu benar-benar masuk world resource.'
+  entry-denied: '&c&lERROR &8| &fKamu butuh minimal &a$%minimum_balance% &fatau 1 &6Voucher Resource &funtuk masuk ke &e(%world%)'
+  enter-paid: '&a&lSUKSES &8| &fSaldo dipotong &a$%cost% &funtuk masuk ke world resource &e(%world%)&f.'
+  voucher-used: '&a&lSUKSES &8| &fVoucher Resource digunakan. Masuk gratis ke &e(%world%)&f.'
+  voucher-given-sender: '&a&lSUKSES &8| &fBerhasil memberi &e%amount%x &6Voucher Resource &fkepada &e%player%'
+  voucher-given-target: '&a&lSUKSES &8| &fKamu menerima &e%amount%x &6Voucher Resource'
+  charge-failed-after-entry: '&c&lERROR &8| &fKamu sudah masuk resource world, tapi pemotongan saldo gagal: &7%error%'
+
+voucher:
+  material: PAPER
+  name: '&6Voucher Resource'
+  lore:
+    - '&7Masuk gratis ke world resource 1x'
+    - '&7Akan otomatis terpakai saat masuk'
 
 worlds:
   overworld:
