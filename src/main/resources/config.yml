@@ -1,3 +1,6 @@
+teleport-confirm-timeout-seconds: 20
+teleport-confirm-distance: 32
+
 messages:
   reload: '&a&lSUKSES &8| &fConfig ArsyaCustomRTP berhasil direload.'
   disabled: '&c&lERROR &8| &fRTP ini sedang dinonaktifkan.'
@@ -5,6 +8,11 @@ messages:
   command-failed: '&c&lERROR &8| &fGagal menjalankan command RTP.'
   not-enough-balance: '&c&lERROR &8| &fSaldo minimal untuk RTP ini adalah &a$%minimum_balance%&f.'
   success: '&a&lSUKSES &8| &fSaldo dipotong &a$%cost% &funtuk RTP &e(%world%)&f.'
+  processing: '&e&lINFO &8| &fRTP sedang diproses. Biaya akan dipotong setelah teleport berhasil.'
+  processing-no-cost: '&e&lINFO &8| &fRTP sedang diproses.'
+  not-confirmed: '&e&lINFO &8| &fRTP gagal, cooldown, atau tidak terkonfirmasi. Saldo tidak dipotong.'
+  charge-failed-after-teleport: '&6&lWARNING &8| &fRTP berhasil, tapi biaya gagal dipotong: &7%error%'
+  pending: '&e&lINFO &8| &fRTP sebelumnya masih diproses. Tunggu sebentar.'
 
 worlds:
   overworld:
@@ -13,6 +21,7 @@ worlds:
     percent: 10
     minimum-balance: 1000
     max-cost: 50000
+    target-world: 'world_resources'
     rtp-command: 'rtp world world_resources'
 
   nether:
@@ -21,6 +30,7 @@ worlds:
     percent: 10
     minimum-balance: 1000
     max-cost: 50000
+    target-world: 'world_nether_resources'
     rtp-command: 'rtp world world_nether_resources'
 
   end:
@@ -29,4 +39,5 @@ worlds:
     percent: 10
     minimum-balance: 1000
     max-cost: 50000
+    target-world: 'world_the_end_resources'
     rtp-command: 'rtp world world_the_end_resources'
