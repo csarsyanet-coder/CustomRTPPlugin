@@ -3,12 +3,13 @@ version: 1.0.0
 main: me.arsyadev.customrtp.CustomRTPPlugin
 api-version: '1.20'
 author: ArsyaDev
+
 depend: [Vault]
 
 commands:
   customrtp:
     description: RTP resource dengan biaya persen
-    usage: /customrtp <overworld|nether|end>
+    usage: /customrtp <overworld|nether|end|reload|givevoucher>
 
 permissions:
   customrtp.admin:
@@ -16,5 +17,9 @@ permissions:
     default: op
 
   customrtp.bypasscost:
-    description: Bypass biaya RTP
+    description: Bypass biaya masuk resource world
+    default: op
+
+  customrtp.givevoucher:
+    description: Memberi voucher resource
     default: op
