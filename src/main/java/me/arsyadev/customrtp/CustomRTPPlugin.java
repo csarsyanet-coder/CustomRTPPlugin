@@ -4,44 +4,43 @@ import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
-import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.Server;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.command.TabExecutor;
 import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.ServicesManager;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitTask;
 
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.UUID;
 
 public final class CustomRTPPlugin extends JavaPlugin implements TabExecutor, Listener {
 
     private Economy economy;
     private final DecimalFormat moneyFormat = new DecimalFormat("#,###.##");
-    private final Map<UUID, PendingRtp> pendingRtps = new HashMap<>();
+    private NamespacedKey voucherKey;
 
     @Override
     public void onEnable() {
         saveDefaultConfig();
+        voucherKey = new NamespacedKey(this, "resource_voucher");
 
         if (!setupEconomy()) {
             getLogger().severe("Vault economy tidak ditemukan. Plugin akan dinonaktifkan.");
@@ -57,16 +56,6 @@ public final class CustomRTPPlugin extends JavaPlugin implements TabExecutor, Li
 
         getServer().getPluginManager().registerEvents(this, this);
         getLogger().info("ArsyaDev CustomRTP berhasil diaktifkan.");
-    }
-
-    @Override
-    public void onDisable() {
-        for (PendingRtp pending : pendingRtps.values()) {
-            if (pending.timeoutTask != null) {
-                pending.timeoutTask.cancel();
-            }
-        }
-        pendingRtps.clear();
     }
 
     private boolean setupEconomy() {
@@ -99,6 +88,55 @@ public final class CustomRTPPlugin extends JavaPlugin implements TabExecutor, Li
             return true;
         }
 
+        if (args.length >= 1 && args[0].equalsIgnoreCase("givevoucher")) {
+            if (!sender.hasPermission("customrtp.givevoucher")) {
+                sender.sendMessage(color("&cKamu tidak punya permission."));
+                return true;
+            }
+
+            if (args.length < 2) {
+                sender.sendMessage(color("&cGunakan: /customrtp givevoucher <player> [amount]"));
+                return true;
+            }
+
+            Player target = Bukkit.getPlayerExact(args[1]);
+            if (target == null) {
+                sender.sendMessage(color("&cPlayer tidak ditemukan."));
+                return true;
+            }
+
+            int amount = 1;
+            if (args.length >= 3) {
+                try {
+                    amount = Math.max(1, Integer.parseInt(args[2]));
+                } catch (NumberFormatException e) {
+                    sender.sendMessage(color("&cAmount harus angka."));
+                    return true;
+                }
+            }
+
+            ItemStack voucher = createVoucherItem(amount);
+            target.getInventory().addItem(voucher);
+
+            sender.sendMessage(color(
+                    getConfig().getString(
+                                    "messages.voucher-given-sender",
+                                    "&aBerhasil memberi &e%amount%x &6Voucher Resource &ake &f%player%"
+                            )
+                            .replace("%amount%", String.valueOf(amount))
+                            .replace("%player%", target.getName())
+            ));
+
+            target.sendMessage(color(
+                    getConfig().getString(
+                                    "messages.voucher-given-target",
+                                    "&aKamu menerima &e%amount%x &6Voucher Resource"
+                            )
+                            .replace("%amount%", String.valueOf(amount))
+            ));
+            return true;
+        }
+
         if (!(sender instanceof Player player)) {
             sender.sendMessage("Command ini hanya bisa dipakai player.");
             return true;
@@ -109,61 +147,20 @@ public final class CustomRTPPlugin extends JavaPlugin implements TabExecutor, Li
             return true;
         }
 
-        if (pendingRtps.containsKey(player.getUniqueId())) {
-            player.sendMessage(color(getConfig().getString(
-                    "messages.pending",
-                    "&eRTP sebelumnya masih diproses. Tunggu sebentar."
-            )));
-            return true;
-        }
-
         String worldKey = args[0].toLowerCase(Locale.ROOT);
-        FileConfiguration config = getConfig();
-        ConfigurationSection worldsSection = config.getConfigurationSection("worlds");
-
-        if (worldsSection == null || !worldsSection.isConfigurationSection(worldKey)) {
+        ConfigurationSection worldSection = getWorldSection(worldKey);
+        if (worldSection == null) {
             player.sendMessage(color("&cTujuan RTP tidak ditemukan di config."));
             return true;
         }
 
-        ConfigurationSection worldSection = worldsSection.getConfigurationSection(worldKey);
-        if (worldSection == null) {
-            player.sendMessage(color("&cKonfigurasi world tidak valid."));
-            return true;
-        }
-
         if (!worldSection.getBoolean("enabled", true)) {
-            player.sendMessage(color(config.getString("messages.disabled", "&cRTP ini sedang dinonaktifkan.")));
+            player.sendMessage(color(getConfig().getString("messages.disabled", "&cRTP ini sedang dinonaktifkan.")));
             return true;
         }
 
-        String permission = worldSection.getString("permission", "");
-        if (!permission.isBlank() && !player.hasPermission(permission)) {
-            player.sendMessage(color(config.getString("messages.no-permission", "&cKamu tidak punya permission.")));
+        if (!canEnterResourceWorld(player, worldKey, worldSection, true)) {
             return true;
-        }
-
-        double balance = economy.getBalance(player);
-        double minimumBalance = worldSection.getDouble("minimum-balance", 1000.0D);
-        double percent = worldSection.getDouble("percent", 10.0D);
-        double maxCost = worldSection.getDouble("max-cost", 50000.0D);
-        boolean bypassCost = player.hasPermission("customrtp.bypasscost");
-
-        if (!bypassCost && balance < minimumBalance) {
-            String message = config.getString(
-                    "messages.not-enough-balance",
-                    "&cSaldo minimal untuk RTP ini adalah &a$%minimum_balance%&f."
-            );
-            player.sendMessage(applyPlaceholders(
-                    message, worldKey, balance, 0.0D, minimumBalance, percent, maxCost
-            ));
-            return true;
-        }
-
-        double rawCost = balance * percent / 100.0D;
-        double cost = Math.floor(Math.min(rawCost, maxCost));
-        if (cost < 0.0D) {
-            cost = 0.0D;
         }
 
         String rtpCommand = worldSection.getString("rtp-command", "rtp world world_resources");
@@ -171,193 +168,275 @@ public final class CustomRTPPlugin extends JavaPlugin implements TabExecutor, Li
             rtpCommand = rtpCommand.substring(1);
         }
 
-        PendingRtp pending = null;
-        if (!bypassCost && cost > 0.0D) {
-            String targetWorld = worldSection.getString("target-world", "").trim();
-            pending = new PendingRtp(
-                    worldKey,
-                    targetWorld,
-                    balance,
-                    cost,
-                    minimumBalance,
-                    percent,
-                    maxCost
-            );
-
-            pendingRtps.put(player.getUniqueId(), pending);
-
-            long timeoutSeconds = Math.max(3L, config.getLong("teleport-confirm-timeout-seconds", 20L));
-            pending.timeoutTask = Bukkit.getScheduler().runTaskLater(
-                    this,
-                    () -> handlePendingTimeout(player.getUniqueId()),
-                    timeoutSeconds * 20L
-            );
-        }
-
         boolean success = player.performCommand(rtpCommand);
-
         if (!success) {
-            clearPending(player.getUniqueId());
-            player.sendMessage(color(config.getString(
-                    "messages.command-failed",
-                    "&cGagal menjalankan command RTP."
-            )));
+            player.sendMessage(color(getConfig().getString("messages.command-failed", "&cGagal menjalankan command RTP.")));
             return true;
         }
 
-        if (pending != null && !pending.completed) {
-            String processingMessage = config.getString(
-                    "messages.processing",
-                    "&eRTP sedang diproses. Biaya akan dipotong setelah teleport berhasil."
-            );
-            player.sendMessage(applyPlaceholders(
-                    processingMessage, worldKey, balance, cost, minimumBalance, percent, maxCost
-            ));
+        player.sendMessage(color(getConfig().getString(
+                "messages.processing",
+                "&eRTP sedang diproses. Biaya akan dipotong saat kamu benar-benar masuk world resource."
+        )));
+        return true;
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onPlayerTeleportCheck(PlayerTeleportEvent event) {
+        if (event.isCancelled()) {
+            return;
         }
 
-        if (pending == null) {
-            String processingMessage = config.getString(
-                    "messages.processing-no-cost",
-                    "&eRTP sedang diproses."
+        ResourceWorldMatch match = getTeleportTargetResourceWorld(event);
+        if (match == null) {
+            return;
+        }
+
+        if (!canEnterResourceWorld(event.getPlayer(), match.worldKey, match.section, false)) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onPlayerTeleportCharge(PlayerTeleportEvent event) {
+        ResourceWorldMatch match = getTeleportTargetResourceWorld(event);
+        if (match == null) {
+            return;
+        }
+
+        Player player = event.getPlayer();
+
+        if (player.hasPermission("customrtp.bypasscost")) {
+            return;
+        }
+
+        double balance = economy.getBalance(player);
+        double minimumBalance = match.section.getDouble("minimum-balance", 1000.0D);
+        double percent = match.section.getDouble("percent", 10.0D);
+        double maxCost = match.section.getDouble("max-cost", 50000.0D);
+
+        if (consumeVoucher(player)) {
+            String voucherMessage = getConfig().getString(
+                    "messages.voucher-used",
+                    "&aVoucher Resource digunakan. Masuk gratis ke &e(%world%)&a."
             );
-            player.sendMessage(color(processingMessage));
+
+            player.sendMessage(applyPlaceholders(
+                    voucherMessage,
+                    match.worldKey,
+                    balance,
+                    0.0D,
+                    minimumBalance,
+                    percent,
+                    maxCost
+            ));
+            return;
+        }
+
+        double cost = calculateCost(balance, percent, maxCost);
+        if (cost <= 0.0D) {
+            return;
+        }
+
+        EconomyResponse withdrawResponse = economy.withdrawPlayer(player, cost);
+        if (!withdrawResponse.transactionSuccess()) {
+            String error = withdrawResponse.errorMessage == null || withdrawResponse.errorMessage.isBlank()
+                    ? "unknown error"
+                    : withdrawResponse.errorMessage;
+
+            player.sendMessage(color(
+                    getConfig().getString(
+                                    "messages.charge-failed-after-entry",
+                                    "&cKamu sudah masuk resource world, tapi pemotongan saldo gagal: %error%"
+                            )
+                            .replace("%error%", error)
+            ));
+            return;
+        }
+
+        String paidMessage = getConfig().getString(
+                "messages.enter-paid",
+                "&aSaldo dipotong &e$%cost% &auntuk masuk ke world resource &f(%world%)"
+        );
+
+        player.sendMessage(applyPlaceholders(
+                paidMessage,
+                match.worldKey,
+                balance,
+                cost,
+                minimumBalance,
+                percent,
+                maxCost
+        ));
+    }
+
+    private ResourceWorldMatch getTeleportTargetResourceWorld(PlayerTeleportEvent event) {
+        if (event.getFrom() == null
+                || event.getTo() == null
+                || event.getFrom().getWorld() == null
+                || event.getTo().getWorld() == null) {
+            return null;
+        }
+
+        String fromWorld = event.getFrom().getWorld().getName();
+        String toWorld = event.getTo().getWorld().getName();
+
+        if (fromWorld.equalsIgnoreCase(toWorld)) {
+            return null;
+        }
+
+        return findResourceWorldByTarget(toWorld);
+    }
+
+    private boolean canEnterResourceWorld(Player player, String worldKey, ConfigurationSection worldSection, boolean fromCommand) {
+        String permission = worldSection.getString("permission", "");
+        if (!permission.isBlank() && !player.hasPermission(permission)) {
+            player.sendMessage(color(getConfig().getString("messages.no-permission", "&cKamu tidak punya permission.")));
+            return false;
+        }
+
+        if (player.hasPermission("customrtp.bypasscost")) {
+            return true;
+        }
+
+        if (hasVoucher(player)) {
+            return true;
+        }
+
+        double balance = economy.getBalance(player);
+        double minimumBalance = worldSection.getDouble("minimum-balance", 1000.0D);
+        double percent = worldSection.getDouble("percent", 10.0D);
+        double maxCost = worldSection.getDouble("max-cost", 50000.0D);
+
+        if (balance < minimumBalance) {
+            String message = fromCommand
+                    ? getConfig().getString(
+                    "messages.not-enough-balance",
+                    "&cSaldo minimal untuk RTP ini adalah &a$%minimum_balance%&f."
+            )
+                    : getConfig().getString(
+                    "messages.entry-denied",
+                    "&cKamu butuh minimal &a$%minimum_balance% &catau 1 &6Voucher Resource &cuntuk masuk ke &e(%world%)"
+            );
+
+            player.sendMessage(applyPlaceholders(
+                    message,
+                    worldKey,
+                    balance,
+                    0.0D,
+                    minimumBalance,
+                    percent,
+                    maxCost
+            ));
+            return false;
         }
 
         return true;
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onPlayerTeleport(PlayerTeleportEvent event) {
-        Player player = event.getPlayer();
-        PendingRtp pending = pendingRtps.get(player.getUniqueId());
-
-        if (pending == null || pending.completed) {
-            return;
-        }
-
-        if (!isSupportedTeleportCause(event.getCause())) {
-            return;
-        }
-
-        Location from = event.getFrom();
-        Location to = event.getTo();
-
-        if (!isSuccessfulRtpTeleport(pending, from, to)) {
-            return;
-        }
-
-        pending.completed = true;
-        pendingRtps.remove(player.getUniqueId());
-
-        if (pending.timeoutTask != null) {
-            pending.timeoutTask.cancel();
-        }
-
-        Bukkit.getScheduler().runTask(this, () -> chargeSuccessfulTeleport(player, pending));
+    private double calculateCost(double balance, double percent, double maxCost) {
+        double rawCost = balance * percent / 100.0D;
+        double cost = Math.floor(Math.min(rawCost, maxCost));
+        return Math.max(cost, 0.0D);
     }
 
-    @EventHandler
-    public void onPlayerQuit(PlayerQuitEvent event) {
-        clearPending(event.getPlayer().getUniqueId());
+    private ConfigurationSection getWorldSection(String worldKey) {
+        ConfigurationSection worldsSection = getConfig().getConfigurationSection("worlds");
+        if (worldsSection == null) {
+            return null;
+        }
+        return worldsSection.getConfigurationSection(worldKey);
     }
 
-    private boolean isSupportedTeleportCause(PlayerTeleportEvent.TeleportCause cause) {
-        return cause == PlayerTeleportEvent.TeleportCause.PLUGIN
-                || cause == PlayerTeleportEvent.TeleportCause.COMMAND
-                || cause == PlayerTeleportEvent.TeleportCause.UNKNOWN;
+    private ResourceWorldMatch findResourceWorldByTarget(String targetWorld) {
+        ConfigurationSection worldsSection = getConfig().getConfigurationSection("worlds");
+        if (worldsSection == null) {
+            return null;
+        }
+
+        for (String worldKey : worldsSection.getKeys(false)) {
+            ConfigurationSection section = worldsSection.getConfigurationSection(worldKey);
+            if (section == null || !section.getBoolean("enabled", true)) {
+                continue;
+            }
+
+            String configuredTarget = section.getString("target-world", "");
+            if (!configuredTarget.isBlank() && configuredTarget.equalsIgnoreCase(targetWorld)) {
+                return new ResourceWorldMatch(worldKey, section);
+            }
+        }
+
+        return null;
     }
 
-    private boolean isSuccessfulRtpTeleport(PendingRtp pending, Location from, Location to) {
-        if (to == null || to.getWorld() == null) {
-            return false;
+    private ItemStack createVoucherItem(int amount) {
+        String materialName = getConfig().getString("voucher.material", "PAPER");
+        Material material = Material.matchMaterial(materialName);
+        if (material == null) {
+            material = Material.PAPER;
         }
 
-        if (!pending.targetWorld.isBlank()) {
-            return to.getWorld().getName().equalsIgnoreCase(pending.targetWorld);
+        ItemStack item = new ItemStack(material, Math.max(1, amount));
+        ItemMeta meta = item.getItemMeta();
+
+        if (meta != null) {
+            meta.setDisplayName(color(getConfig().getString("voucher.name", "&6Voucher Resource")));
+
+            List<String> lore = getConfig().getStringList("voucher.lore");
+            if (!lore.isEmpty()) {
+                List<String> coloredLore = new ArrayList<>();
+                for (String line : lore) {
+                    coloredLore.add(color(line));
+                }
+                meta.setLore(coloredLore);
+            }
+
+            meta.getPersistentDataContainer().set(voucherKey, PersistentDataType.INTEGER, 1);
+            item.setItemMeta(meta);
         }
 
-        if (from.getWorld() != null
-                && !from.getWorld().getName().equalsIgnoreCase(to.getWorld().getName())) {
+        return item;
+    }
+
+    private boolean hasVoucher(Player player) {
+        for (ItemStack item : player.getInventory().getContents()) {
+            if (isVoucher(item)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean consumeVoucher(Player player) {
+        ItemStack[] contents = player.getInventory().getContents();
+
+        for (int i = 0; i < contents.length; i++) {
+            ItemStack item = contents[i];
+            if (!isVoucher(item)) {
+                continue;
+            }
+
+            if (item.getAmount() <= 1) {
+                player.getInventory().setItem(i, null);
+            } else {
+                item.setAmount(item.getAmount() - 1);
+            }
+
+            player.updateInventory();
             return true;
         }
 
-        double minDistance = Math.max(8.0D, getConfig().getDouble("teleport-confirm-distance", 32.0D));
-        return from.distanceSquared(to) >= (minDistance * minDistance);
+        return false;
     }
 
-    private void chargeSuccessfulTeleport(Player player, PendingRtp pending) {
-        if (!player.isOnline()) {
-            return;
+    private boolean isVoucher(ItemStack item) {
+        if (item == null || item.getType().isAir() || !item.hasItemMeta()) {
+            return false;
         }
 
-        EconomyResponse withdrawResponse = economy.withdrawPlayer(player, pending.cost);
-        if (!withdrawResponse.transactionSuccess()) {
-            String message = getConfig().getString(
-                    "messages.charge-failed-after-teleport",
-                    "&eRTP berhasil, tapi biaya tidak bisa dipotong: %error%"
-            );
-
-            String error = withdrawResponse.errorMessage == null || withdrawResponse.errorMessage.isBlank()
-                    ? "unknown error"
-                    : withdrawResponse.errorMessage;
-
-            player.sendMessage(color(message.replace("%error%", error)));
-            return;
-        }
-
-        String successMessage = getConfig().getString(
-                "messages.success",
-                "&aSaldo dipotong &e$%cost% &auntuk RTP &f(%world%)"
-        );
-
-        player.sendMessage(applyPlaceholders(
-                successMessage,
-                pending.worldKey,
-                pending.requestBalance,
-                pending.cost,
-                pending.minimumBalance,
-                pending.percent,
-                pending.maxCost
-        ));
-    }
-
-    private void handlePendingTimeout(UUID playerId) {
-        PendingRtp pending = pendingRtps.remove(playerId);
-        if (pending == null || pending.completed) {
-            return;
-        }
-
-        pending.completed = true;
-
-        Player player = Bukkit.getPlayer(playerId);
-        if (player != null && player.isOnline()) {
-            String message = getConfig().getString(
-                    "messages.not-confirmed",
-                    "&eRTP gagal, cooldown, atau tidak terkonfirmasi. Saldo tidak dipotong."
-            );
-
-            player.sendMessage(applyPlaceholders(
-                    message,
-                    pending.worldKey,
-                    pending.requestBalance,
-                    pending.cost,
-                    pending.minimumBalance,
-                    pending.percent,
-                    pending.maxCost
-            ));
-        }
-    }
-
-    private void clearPending(UUID playerId) {
-        PendingRtp pending = pendingRtps.remove(playerId);
-        if (pending == null) {
-            return;
-        }
-
-        pending.completed = true;
-        if (pending.timeoutTask != null) {
-            pending.timeoutTask.cancel();
-        }
+        ItemMeta meta = item.getItemMeta();
+        Integer value = meta.getPersistentDataContainer().get(voucherKey, PersistentDataType.INTEGER);
+        return value != null && value == 1;
     }
 
     @Override
@@ -374,7 +453,28 @@ public final class CustomRTPPlugin extends JavaPlugin implements TabExecutor, Li
                 suggestions.add("reload");
             }
 
+            if (sender.hasPermission("customrtp.givevoucher")) {
+                suggestions.add("givevoucher");
+            }
+
             return suggestions;
+        }
+
+        if (args.length == 2 && args[0].equalsIgnoreCase("givevoucher")) {
+            List<String> players = new ArrayList<>();
+            for (Player online : Bukkit.getOnlinePlayers()) {
+                players.add(online.getName());
+            }
+            return players;
+        }
+
+        if (args.length == 3 && args[0].equalsIgnoreCase("givevoucher")) {
+            List<String> amounts = new ArrayList<>();
+            amounts.add("1");
+            amounts.add("5");
+            amounts.add("10");
+            amounts.add("64");
+            return amounts;
         }
 
         return Collections.emptyList();
@@ -412,35 +512,13 @@ public final class CustomRTPPlugin extends JavaPlugin implements TabExecutor, Li
         return ChatColor.translateAlternateColorCodes('&', text);
     }
 
-    private static final class PendingRtp {
+    private static final class ResourceWorldMatch {
         private final String worldKey;
-        private final String targetWorld;
-        private final double requestBalance;
-        private final double cost;
-        private final double minimumBalance;
-        private final double percent;
-        private final double maxCost;
+        private final ConfigurationSection section;
 
-        private BukkitTask timeoutTask;
-        private boolean completed;
-
-        private PendingRtp(
-                String worldKey,
-                String targetWorld,
-                double requestBalance,
-                double cost,
-                double minimumBalance,
-                double percent,
-                double maxCost
-        ) {
+        private ResourceWorldMatch(String worldKey, ConfigurationSection section) {
             this.worldKey = worldKey;
-            this.targetWorld = targetWorld == null ? "" : targetWorld;
-            this.requestBalance = requestBalance;
-            this.cost = cost;
-            this.minimumBalance = minimumBalance;
-            this.percent = percent;
-            this.maxCost = maxCost;
-            this.completed = false;
+            this.section = section;
         }
     }
 }
