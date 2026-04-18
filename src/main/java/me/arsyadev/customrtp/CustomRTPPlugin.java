@@ -6,6 +6,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.Server;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -55,6 +56,12 @@ public final class CustomRTPPlugin extends JavaPlugin implements TabExecutor, Li
         }
 
         getServer().getPluginManager().registerEvents(this, this);
+
+        if (getServer().getPluginManager().getPlugin("PlaceholderAPI") != null) {
+            new CustomRTPExpansion(this).register();
+            getLogger().info("PlaceholderAPI hook aktif.");
+        }
+
         getLogger().info("ArsyaDev CustomRTP berhasil diaktifkan.");
     }
 
@@ -181,12 +188,8 @@ public final class CustomRTPPlugin extends JavaPlugin implements TabExecutor, Li
         return true;
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPlayerTeleportCheck(PlayerTeleportEvent event) {
-        if (event.isCancelled()) {
-            return;
-        }
-
         ResourceWorldMatch match = getTeleportTargetResourceWorld(event);
         if (match == null) {
             return;
@@ -439,6 +442,72 @@ public final class CustomRTPPlugin extends JavaPlugin implements TabExecutor, Li
         return value != null && value == 1;
     }
 
+    public String getPlaceholderValue(OfflinePlayer offlinePlayer, String worldKey, String valueKey) {
+        if (economy == null || offlinePlayer == null) {
+            return "";
+        }
+
+        ConfigurationSection worldSection = getWorldSection(worldKey);
+        if (worldSection == null) {
+            return "";
+        }
+
+        double balance = economy.getBalance(offlinePlayer);
+        double minimumBalance = worldSection.getDouble("minimum-balance", 1000.0D);
+        double percent = worldSection.getDouble("percent", 10.0D);
+        double maxCost = worldSection.getDouble("max-cost", 50000.0D);
+        double cost = balance >= minimumBalance ? calculateCost(balance, percent, maxCost) : 0.0D;
+
+        Player onlinePlayer = offlinePlayer.getPlayer();
+        boolean hasVoucher = onlinePlayer != null && hasVoucher(onlinePlayer);
+
+        return switch (valueKey) {
+            case "balance" -> formatMoney(balance);
+            case "cost" -> formatMoney(cost);
+            case "percent" -> formatSimple(percent);
+            case "minimum_balance" -> formatMoney(minimumBalance);
+            case "max_cost" -> formatMoney(maxCost);
+            case "has_voucher" -> hasVoucher ? "Ada" : "Tidak ada";
+            case "status" -> hasVoucher ? "Gratis dengan Voucher" : "Potong $" + formatMoney(cost);
+            default -> "";
+        };
+    }
+
+    private String formatMoney(double amount) {
+        return moneyFormat.format(amount);
+    }
+
+    private String formatSimple(double value) {
+        if (value == Math.floor(value)) {
+            return String.valueOf((long) value);
+        }
+        return String.valueOf(value);
+    }
+
+    private String applyPlaceholders(
+            String message,
+            String world,
+            double balance,
+            double cost,
+            double minimumBalance,
+            double percent,
+            double maxCost
+    ) {
+        if (message == null) {
+            return "";
+        }
+
+        return color(
+                message
+                        .replace("%world%", world)
+                        .replace("%balance%", formatMoney(balance))
+                        .replace("%cost%", formatMoney(cost))
+                        .replace("%minimum_balance%", formatMoney(minimumBalance))
+                        .replace("%percent%", formatMoney(percent))
+                        .replace("%max_cost%", formatMoney(maxCost))
+        );
+    }
+
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
@@ -478,34 +547,6 @@ public final class CustomRTPPlugin extends JavaPlugin implements TabExecutor, Li
         }
 
         return Collections.emptyList();
-    }
-
-    private String applyPlaceholders(
-            String message,
-            String world,
-            double balance,
-            double cost,
-            double minimumBalance,
-            double percent,
-            double maxCost
-    ) {
-        if (message == null) {
-            return "";
-        }
-
-        return color(
-                message
-                        .replace("%world%", world)
-                        .replace("%balance%", formatMoney(balance))
-                        .replace("%cost%", formatMoney(cost))
-                        .replace("%minimum_balance%", formatMoney(minimumBalance))
-                        .replace("%percent%", formatMoney(percent))
-                        .replace("%max_cost%", formatMoney(maxCost))
-        );
-    }
-
-    private String formatMoney(double amount) {
-        return moneyFormat.format(amount);
     }
 
     private String color(String text) {
